@@ -24,20 +24,7 @@ public class OpenCircle : ModuleRules
 		PrivateDependencyModuleNames.AddRange(new string[] { });
 
 		PublicIncludePaths.AddRange(new string[] {
-			"OpenCircle",
-			"OpenCircle/Variant_Platforming",
-			"OpenCircle/Variant_Platforming/Animation",
-			"OpenCircle/Variant_Combat",
-			"OpenCircle/Variant_Combat/AI",
-			"OpenCircle/Variant_Combat/Animation",
-			"OpenCircle/Variant_Combat/Gameplay",
-			"OpenCircle/Variant_Combat/Interfaces",
-			"OpenCircle/Variant_Combat/UI",
-			"OpenCircle/Variant_SideScrolling",
-			"OpenCircle/Variant_SideScrolling/AI",
-			"OpenCircle/Variant_SideScrolling/Gameplay",
-			"OpenCircle/Variant_SideScrolling/Interfaces",
-			"OpenCircle/Variant_SideScrolling/UI"
+			"OpenCircle"
 		});
 
 		// Uncomment if you are using Slate UI
