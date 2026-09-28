@@ -23,17 +23,28 @@ AOpenCircleCharacter::AOpenCircleCharacter()
 	bUseControllerRotationRoll = false;
 
 	// Configure character movement
-	GetCharacterMovement()->bOrientRotationToMovement = true;
-	GetCharacterMovement()->RotationRate = FRotator(0.0f, 500.0f, 0.0f);
+	UCharacterMovementComponent* Movement = GetCharacterMovement();
+	Movement->bOrientRotationToMovement = true;
+	Movement->RotationRate = FRotator(0.0f, 360.0f, 0.0f);
 
 	// Note: For faster iteration times these variables, and many more, can be tweaked in the Character Blueprint
 	// instead of recompiling to adjust them
-	GetCharacterMovement()->JumpZVelocity = 500.f;
-	GetCharacterMovement()->AirControl = 0.35f;
-	GetCharacterMovement()->MaxWalkSpeed = 500.f;
-	GetCharacterMovement()->MinAnalogWalkSpeed = 20.f;
-	GetCharacterMovement()->BrakingDecelerationWalking = 2000.f;
-	GetCharacterMovement()->BrakingDecelerationFalling = 1500.0f;
+
+	// Ground: gradual acceleration and braking read as weight instead of snapping
+	Movement->JumpZVelocity = 450.f;
+	Movement->AirControl = 0.35f;
+	Movement->MaxWalkSpeed = 500.f;
+	Movement->MinAnalogWalkSpeed = 20.f;
+	Movement->MaxAcceleration = 1200.f;
+	Movement->BrakingDecelerationWalking = 1000.f;
+	Movement->BrakingDecelerationFalling = 1500.0f;
+	Movement->GroundFriction = 6.f;
+
+	// Swimming: slow and floaty, drifts to a stop
+	Movement->MaxSwimSpeed = 300.f;
+	Movement->BrakingDecelerationSwimming = 200.f;
+	Movement->Buoyancy = 1.f;
+	Movement->GetNavAgentPropertiesRef().bCanSwim = true;
 
 	// Create a camera boom (pulls in towards the player if there is a collision)
 	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
@@ -58,6 +69,7 @@ void AOpenCircleCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInpu
 		// Moving
 		EnhancedInputComponent->BindAction(MoveAction, ETriggerEvent::Triggered, this, &AOpenCircleCharacter::Move);
 		EnhancedInputComponent->BindAction(SwimVerticalAction, ETriggerEvent::Triggered, this, &AOpenCircleCharacter::SwimVertical);
+		EnhancedInputComponent->BindAction(SwimVerticalAction, ETriggerEvent::Completed, this, &ACharacter::StopJumping);
 
 		// Looking
 		EnhancedInputComponent->BindAction(LookAction, ETriggerEvent::Triggered, this, &AOpenCircleCharacter::Look);
@@ -131,8 +143,15 @@ void AOpenCircleCharacter::DoLook(float Yaw, float Pitch)
 
 void AOpenCircleCharacter::DoSwimVertical(float Direction)
 {
-	// only meaningful while swimming; ignored by the movement component in other modes
-	AddMovementInput(FVector::UpVector, Direction);
+	if (GetCharacterMovement()->IsSwimming())
+	{
+		AddMovementInput(FVector::UpVector, Direction);
+	}
+	else if (Direction > 0.f)
+	{
+		// the same Up input jumps while on land
+		Jump();
+	}
 }
 
 void AOpenCircleCharacter::DoTalkStart()
