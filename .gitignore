@@ -34,6 +34,9 @@ Plugins/**/Intermediate/
 *.exp
 *.ilk
 
+# Local editor scripts
+*.py
+
 # OS files
 Thumbs.db
 Desktop.ini
