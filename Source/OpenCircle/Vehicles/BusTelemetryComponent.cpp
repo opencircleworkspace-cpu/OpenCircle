@@ -9,6 +9,7 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Kismet/KismetSystemLibrary.h"
+#include "UnrealClient.h"
 
 namespace BusTelemetry
 {
@@ -62,6 +63,15 @@ void UBusTelemetryComponent::TickComponent(float DeltaTime, ELevelTick TickType,
 void UBusTelemetryComponent::RunAutoTest(float Time)
 {
 	ABusVehicle* Bus = CastChecked<ABusVehicle>(GetOwner());
+	// Screenshots at fixed moments: cruising, turning, braking (Saved/Screenshots)
+	for (const float ShotTime : { 6.f, 10.f, 14.f })
+	{
+		if (Time >= ShotTime && Time - Bus->GetWorld()->GetDeltaSeconds() < ShotTime)
+		{
+			FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir() / FString::Printf(TEXT("Screenshots/bus_test_%02d.png"), FMath::RoundToInt(ShotTime)), false, false);
+			UE_LOG(LogTemp, Warning, TEXT("BUS_SCREENSHOT %.0f"), ShotTime);
+		}
+	}
 	for (const BusTelemetry::FStep& Step : BusTelemetry::Steps)
 	{
 		if (Time < Step.End)
@@ -91,7 +101,7 @@ void UBusTelemetryComponent::WriteSample()
 		FString Header = TEXT("time,throttle,brake,steer,park,simulating,mass,speed_kmh,rpm,gear,x,y,z,pitch,roll,yaw,wheels");
 		for (int32 i = 0; i < Movement->WheelSetups.Num(); ++i)
 		{
-			Header += FString::Printf(TEXT(",w%d_air,w%d_susp,w%d_rpm"), i, i, i);
+			Header += FString::Printf(TEXT(",w%d_air,w%d_susp,w%d_rpm,w%d_drive,w%d_brake"), i, i, i, i, i);
 		}
 		FFileHelper::SaveStringToFile(Header + LINE_TERMINATOR, *FilePath);
 		bHeaderWritten = true;
@@ -105,10 +115,15 @@ void UBusTelemetryComponent::WriteSample()
 		Bus->GetSpeedKmh(), Bus->GetEngineRpm(), Bus->GetCurrentGear(),
 		Location.X, Location.Y, Location.Z, Rotation.Pitch, Rotation.Roll, Rotation.Yaw, Movement->Wheels.Num());
 
-	for (const UChaosVehicleWheel* Wheel : Movement->Wheels)
+	UChaosWheeledVehicleMovementComponent* MutableMovement = const_cast<UChaosWheeledVehicleMovementComponent*>(Movement);
+	const TUniquePtr<FPhysicsVehicleOutput>& Output = MutableMovement->PhysicsVehicleOutput();
+	for (int32 i = 0; i < Movement->Wheels.Num(); ++i)
 	{
-		Line += Wheel ? FString::Printf(TEXT(",%d,%.1f,%.0f"), Wheel->IsInAir() ? 1 : 0, Wheel->GetSuspensionOffset(),
-			Wheel->GetWheelAngularVelocity() * 9.549f) : TEXT(",,,");
+		const UChaosVehicleWheel* Wheel = Movement->Wheels[i];
+		const bool bOut = Output.IsValid() && Output->Wheels.IsValidIndex(i);
+		Line += Wheel ? FString::Printf(TEXT(",%d,%.1f,%.0f,%.0f,%.0f"), Wheel->IsInAir() ? 1 : 0, Wheel->GetSuspensionOffset(),
+			Wheel->GetWheelAngularVelocity() * 9.549f, bOut ? Output->Wheels[i].DriveTorque : -1.f, bOut ? Output->Wheels[i].BrakeTorque : -1.f)
+			: TEXT(",,,,,");
 	}
 	FFileHelper::SaveStringToFile(Line + LINE_TERMINATOR, *FilePath, FFileHelper::EEncodingOptions::AutoDetect,
 		&IFileManager::Get(), FILEWRITE_Append);

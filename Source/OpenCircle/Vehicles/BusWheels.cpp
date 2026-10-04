@@ -5,6 +5,8 @@
 UBusWheelFront::UBusWheelFront()
 {
 	AxleType = EAxleType::Front;
+	// UBusDrivetrainComponent sets drive/brake torque directly
+	ExternalTorqueCombineMethod = ETorqueCombineMethod::Override;
 	WheelRadius = 52.7f;
 	WheelWidth = 28.f;
 	WheelMass = 60.f;
@@ -25,6 +27,7 @@ UBusWheelFront::UBusWheelFront()
 UBusWheelRear::UBusWheelRear()
 {
 	AxleType = EAxleType::Rear;
+	ExternalTorqueCombineMethod = ETorqueCombineMethod::Override;
 	WheelRadius = 52.7f;
 	WheelWidth = 56.f;
 	WheelMass = 110.f;

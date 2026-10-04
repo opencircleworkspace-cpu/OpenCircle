@@ -4,6 +4,7 @@
 #include "Vehicles/BusVehicle.h"
 #include "Vehicles/BusAirSystemComponent.h"
 #include "Vehicles/BusControlsComponent.h"
+#include "Vehicles/BusDrivetrainComponent.h"
 #include "Gameplay/BusStop.h"
 #include "Components/SkeletalMeshComponent.h"
 
@@ -26,8 +27,14 @@ void ABusHUD::DrawHUD()
 	TArray<TPair<FString, FLinearColor>> Lines;
 	auto Add = [&Lines](const FString& Text, const FLinearColor& Color = FLinearColor::White) { Lines.Emplace(Text, Color); };
 
-	Add(FString::Printf(TEXT("%3.0f km/h   %4.0f rpm   Gear %s %s"), FMath::Abs(Bus->GetSpeedKmh()), Bus->GetEngineRpm(),
-		*GearText, Bus->IsManualGearbox() ? TEXT("(manual)") : TEXT("(auto)")));
+	const UBusDrivetrainComponent* Drive = Bus->GetDrivetrain();
+	const TCHAR* EngineText[] = { TEXT("ENGINE OFF (I to start)"), TEXT("CRANKING"), TEXT("running") };
+	Add(FString::Printf(TEXT("%3.0f km/h   %4.0f rpm   Gear %s%s %s"), FMath::Abs(Bus->GetSpeedKmh()), Bus->GetEngineRpm(),
+		*GearText, Drive->IsShifting() ? TEXT(" (shifting)") : TEXT(""), Bus->IsManualGearbox() ? TEXT("[manual]") : TEXT("[auto]")));
+	Add(FString::Printf(TEXT("Engine %s  %3.0f Nm  turbo %3.0f%%  clutch %3.0f%%%s%s"), EngineText[static_cast<int32>(Drive->GetEngineState())],
+		Drive->GetEngineTorque(), Drive->GetTurboBoost() * 100.f, Drive->GetClutchEngagement() * 100.f,
+		Drive->IsClutchLocked() ? TEXT(" locked") : TEXT(""), Drive->IsExhaustBrakeOn() ? TEXT("  EXHAUST BRAKE") : TEXT("")),
+		Drive->GetEngineState() == EBusEngineState::Running ? FLinearColor::White : FLinearColor::Red);
 	Add(FString::Printf(TEXT("Air %.1f bar"), Air->GetPressure()), Air->IsLowPressure() ? FLinearColor::Red : FLinearColor::White);
 	if (Air->IsParkingBrakeApplied())
 	{
@@ -52,7 +59,7 @@ void ABusHUD::DrawHUD()
 		Add(FString::Printf(TEXT("PHYSICS NOT SIMULATING (bodies %d): check SK_Bus physics asset"), Bus->GetMesh()->Bodies.Num()), FLinearColor::Red);
 	}
 	Add(Bus->GetDebugString(), FLinearColor(0.4f, 0.9f, 1.f));
-	Add(TEXT("W throttle  S brake/reverse  A/D steer  L headlights  1/2 doors  C camera"),
+	Add(TEXT("W/S pedals (auto: hold S stopped = reverse)  A/D steer  M gearbox  Q/E gears  Shift clutch  I ignition  B exhaust brake  L lights  1/2 doors  C camera"),
 		FLinearColor(0.7f, 0.7f, 0.7f));
 
 	float Y = 30.f;

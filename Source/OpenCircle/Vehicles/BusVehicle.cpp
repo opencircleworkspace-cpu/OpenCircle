@@ -5,7 +5,12 @@
 #include "Vehicles/BusAirSystemComponent.h"
 #include "Vehicles/BusControlsComponent.h"
 #include "Vehicles/BusTelemetryComponent.h"
+#include "Vehicles/BusDrivetrainComponent.h"
+#include "Vehicles/BusDriverPoseComponent.h"
+#include "Kismet/KismetMathLibrary.h"
+#include "HAL/IConsoleManager.h"
 #include "ChaosWheeledVehicleMovementComponent.h"
+#include "ChaosVehicleWheel.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/SpotLightComponent.h"
@@ -21,6 +26,7 @@ namespace BusVehicle
 	// Chaos wheel order; bone names match Tools/Blender/make_bus.py
 	const FName WheelBones[] = { TEXT("Wheel_FL"), TEXT("Wheel_FR"), TEXT("Wheel_RL"), TEXT("Wheel_RR") };
 	constexpr float CmPerSecToKmh = 0.036f;
+	static TAutoConsoleVariable<int32> CVarStartCamera(TEXT("bus.StartCamera"), 0, TEXT("Camera the bus starts with: 0 chase, 1 cockpit, 2 driver view"));
 
 	// Wheel centres in cm (Tata LPO 1612: wheelbase 620, tyre radius 52.7). Set in code rather than read
 	// from bones, so a skeleton import scale can never misplace the wheels. Kerb side is -Y.
@@ -60,6 +66,32 @@ ABusVehicle::ABusVehicle()
 		Door->BodyInstance.bAutoWeld = false;
 	}
 
+	// Cab controls: pivots from Tools/Blender/interior/cab_controls.py (Blender -> UE: x100, Y flipped)
+	auto MakeCab = [this](const TCHAR* Name, const FVector& Location)
+	{
+		UStaticMeshComponent* Mesh = CreateDefaultSubobject<UStaticMeshComponent>(Name);
+		Mesh->SetupAttachment(BodyMesh);
+		Mesh->SetRelativeLocation(Location);
+		Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		return Mesh;
+	};
+	CabColumnMesh = MakeCab(TEXT("CabColumn"), FVector::ZeroVector);
+	SteeringWheelMesh = MakeCab(TEXT("SteeringWheel"), FVector(520.f, 75.f, 186.f));
+	GearLeverMesh = MakeCab(TEXT("GearLever"), FVector(492.f, 36.f, 145.f));
+	PedalClutchMesh = MakeCab(TEXT("PedalClutch"), FVector(528.f, 55.f, 108.f));
+	PedalBrakeMesh = MakeCab(TEXT("PedalBrake"), FVector(528.f, 74.f, 108.f));
+	PedalAcceleratorMesh = MakeCab(TEXT("PedalAccelerator"), FVector(528.f, 93.f, 108.f));
+	DashboardMesh = MakeCab(TEXT("Dashboard"), FVector::ZeroVector);
+	NeedleTachoMesh = MakeCab(TEXT("NeedleTacho"), FVector(549.64f, 66.5f, 176.17f));
+	NeedleSpeedoMesh = MakeCab(TEXT("NeedleSpeedo"), FVector(549.64f, 83.5f, 176.17f));
+	NeedleAirMesh = MakeCab(TEXT("NeedleAir"), FVector(548.79f, 53.5f, 174.36f));
+	NeedleFuelMesh = MakeCab(TEXT("NeedleFuel"), FVector(548.79f, 96.5f, 174.36f));
+	InteriorSeatsMesh = MakeCab(TEXT("InteriorSeats"), FVector::ZeroVector);
+	InteriorFittingsMesh = MakeCab(TEXT("InteriorFittings"), FVector::ZeroVector);
+
+	DriverMesh = CreateDefaultSubobject<UBusDriverPoseComponent>(TEXT("DriverMesh"));
+	DriverMesh->SetupAttachment(BodyMesh);
+
 	for (const FName& Bone : BusVehicle::WheelBones)
 	{
 		UStaticMeshComponent* Wheel = CreateDefaultSubobject<UStaticMeshComponent>(*(Bone.ToString() + TEXT("Mesh")));
@@ -86,6 +118,14 @@ ABusVehicle::ABusVehicle()
 	CockpitCamera->bUsePawnControlRotation = true;
 	CockpitCamera->SetAutoActivate(false);
 
+	// Saloon view: standing in the aisle behind-left of the driver, looking at him and the road
+	DriverViewCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("DriverViewCamera"));
+	DriverViewCamera->SetupAttachment(GetMesh());
+	DriverViewCamera->SetRelativeLocation(FVector(415.f, 5.f, 245.f));
+	DriverViewCamera->SetRelativeRotation(UKismetMathLibrary::FindLookAtRotation(FVector(415.f, 5.f, 245.f), FVector(560.f, 85.f, 175.f)));
+	DriverViewCamera->SetFieldOfView(75.f);
+	DriverViewCamera->SetAutoActivate(false);
+
 	HeadlightLeft = CreateDefaultSubobject<USpotLightComponent>(TEXT("HeadlightLeft"));
 	HeadlightLeft->SetupAttachment(GetMesh());
 	HeadlightLeft->SetRelativeLocation(FVector(605.f, -85.f, 90.f));
@@ -104,6 +144,7 @@ ABusVehicle::ABusVehicle()
 	AirSystem = CreateDefaultSubobject<UBusAirSystemComponent>(TEXT("AirSystem"));
 	Controls = CreateDefaultSubobject<UBusControlsComponent>(TEXT("Controls"));
 	Telemetry = CreateDefaultSubobject<UBusTelemetryComponent>(TEXT("Telemetry"));
+	Drivetrain = CreateDefaultSubobject<UBusDrivetrainComponent>(TEXT("Drivetrain"));
 
 	bUseControllerRotationYaw = false;
 
@@ -139,6 +180,9 @@ ABusVehicle::ABusVehicle()
 	Torque->AddKey(1000.f, 1.f);
 	Torque->AddKey(1800.f, 0.95f);
 	Torque->AddKey(2600.f, 0.6f);
+
+	// Engine, clutch, gearbox and brakes are simulated by UBusDrivetrainComponent
+	Movement->bMechanicalSimEnabled = false;
 
 	Movement->DifferentialSetup.DifferentialType = EVehicleDifferential::RearWheelDrive;
 	Movement->TransmissionSetup.bUseAutomaticGears = true;
@@ -188,7 +232,8 @@ void ABusVehicle::BeginPlay()
 	BodyBaseLocation = BodyMesh->GetRelativeLocation();
 	CacheWheelBases();
 	Controls->Initialize(BodyMesh, { HeadlightLeft.Get(), HeadlightRight.Get() });
-	SetCamera(EBusCamera::Chase);
+	SetCamera(static_cast<EBusCamera>(FMath::Clamp(BusVehicle::CVarStartCamera.GetValueOnGameThread(), 0, 2)));
+	DriverMesh->InitializeSeat(DriverPelvis);
 
 	const FBox BodyBox = GetMesh()->Bodies.Num() > 0 ? GetMesh()->Bodies[0]->GetBodyBounds() : FBox(ForceInit);
 	UE_LOG(LogTemp, Warning, TEXT("BUS_PHYS %s simulating=%d bodies=%d body_min=%s body_max=%s actor=%s"), *GetName(),
@@ -209,6 +254,8 @@ void ABusVehicle::Tick(float DeltaTime)
 	UpdateDriving(DeltaTime);
 	UpdateDoors(DeltaTime);
 	UpdateWheelVisuals();
+	UpdateCabVisuals(DeltaTime);
+	UpdateDriver(DeltaTime);
 }
 
 void ABusVehicle::UpdateDriving(float DeltaTime)
@@ -217,41 +264,59 @@ void ABusVehicle::UpdateDriving(float DeltaTime)
 	const float ForwardKmh = GetSpeedKmh();
 	const float Speed = FMath::Abs(ForwardKmh);
 
-	// Nobody driving: stay parked
+	// Nobody driving: parked, engine idling
 	if (!IsPlayerControlled())
 	{
-		Movement->SetThrottleInput(0.f);
-		Movement->SetBrakeInput(0.f);     // brake pedal at a standstill = reverse in Chaos
-		Movement->SetHandbrakeInput(true);
+		Drivetrain->Update(DeltaTime, 0.f, 0.f, 0.f, true);
 		return;
 	}
 
-	float Brake = FMath::Pow(FMath::Clamp(BrakeInput, 0.f, 1.f), BrakeCurveExponent);
-	// Engine braking only when rolling forward; while reversing the brake pedal drives backwards
-	if (ThrottleInput < 0.05f && ForwardKmh > 10.f)
+	float Throttle = ThrottleInput;
+	float Brake = BrakeInput;
+
+	// Automatic: S drives in reverse; holding a pedal at a standstill swaps drive/reverse
+	if (Drivetrain->GetGearboxMode() == EBusGearboxMode::Automatic)
 	{
-		Brake = FMath::Max(Brake, EngineBrake);
+		const bool bInReverse = Drivetrain->GetGear() < 0;
+		if (Speed < 1.f && (bInReverse ? ThrottleInput : BrakeInput) > 0.5f && (bInReverse ? BrakeInput : ThrottleInput) < 0.05f)
+		{
+			DirectionHoldTimer += DeltaTime;
+			if (DirectionHoldTimer > DirectionChangeHoldTime)
+			{
+				Drivetrain->SelectAutoDirection(!bInReverse);
+				DirectionHoldTimer = 0.f;
+			}
+		}
+		else
+		{
+			DirectionHoldTimer = 0.f;
+		}
+		if (bInReverse)
+		{
+			Throttle = BrakeInput;
+			Brake = ThrottleInput;
+		}
 	}
 
 	// Door interlock: no driving off with doors open
 	const bool bDoorsOpen = AreDoorsOpen();
-	const float Throttle = bDoorsOpen ? 0.f : ThrottleInput;
-	// Hold with the handbrake: at a standstill Chaos treats the brake pedal as reverse
 	if (bDoorsOpen)
 	{
-		Brake = 0.f;
+		Throttle = 0.f;
 	}
 
-	const float SteerScale = FMath::Lerp(1.f, HighSpeedSteeringScale, FMath::Clamp(Speed / SteeringFadeSpeedKmh, 0.f, 1.f));
-
-	if (ForwardKmh > 1.f)
+	if (Speed > 1.f)
 	{
-		AirSystem->ConsumeBrake(BrakeInput, DeltaTime);   // S acts as reverse when stopped; that uses no air
+		AirSystem->ConsumeBrake(Brake, DeltaTime);
 	}
+	Drivetrain->Update(DeltaTime, Throttle, Brake, ClutchInput, bDoorsOpen || AirSystem->IsParkingBrakeApplied());
+
+	// Chaos's own engine is off; its inputs only keep the body awake (it sleeps slow vehicles with no input)
 	Movement->SetThrottleInput(Throttle);
 	Movement->SetBrakeInput(Brake);
+
+	const float SteerScale = FMath::Lerp(1.f, HighSpeedSteeringScale, FMath::Clamp(Speed / SteeringFadeSpeedKmh, 0.f, 1.f));
 	Movement->SetSteeringInput(SteerInput * SteerScale);
-	Movement->SetHandbrakeInput(bDoorsOpen || AirSystem->IsParkingBrakeApplied());
 }
 
 void ABusVehicle::UpdateDoors(float DeltaTime)
@@ -277,7 +342,7 @@ void ABusVehicle::UpdateWheelVisuals()
 	{
 		const UChaosVehicleWheel* Wheel = Movement && Movement->Wheels.IsValidIndex(i) ? Movement->Wheels[i].Get() : nullptr;
 		const float Offset = Wheel ? Wheel->GetSuspensionOffset() : 0.f;
-		const FRotator Rotation = Wheel ? FRotator(Wheel->GetRotationAngle(), Wheel->GetSteerAngle(), 0.f)   // same convention as Chaos VehicleAnimationInstance : FRotator::ZeroRotator;
+		const FRotator Rotation = Wheel ? FRotator(Wheel->GetRotationAngle(), Wheel->GetSteerAngle(), 0.f) : FRotator::ZeroRotator;   // same convention as Chaos VehicleAnimationInstance
 		WheelMeshes[i]->SetRelativeLocationAndRotation(WheelBases[i] + FVector(0.f, 0.f, Offset), Rotation);
 		// Meshes are modelled for the kerb (-Y) side; mirror for the right-hand wheels
 		WheelMeshes[i]->SetRelativeScale3D(FVector(1.f, WheelBases[i].Y > 0.f ? -1.f : 1.f, 1.f));
@@ -291,12 +356,17 @@ float ABusVehicle::GetSpeedKmh() const
 
 float ABusVehicle::GetEngineRpm() const
 {
-	return CastChecked<UChaosWheeledVehicleMovementComponent>(GetVehicleMovementComponent())->GetEngineRotationSpeed();
+	return Drivetrain->GetEngineRpm();
 }
 
 int32 ABusVehicle::GetCurrentGear() const
 {
-	return GetVehicleMovementComponent()->GetCurrentGear();
+	return Drivetrain->GetGear();
+}
+
+bool ABusVehicle::IsManualGearbox() const
+{
+	return Drivetrain->GetGearboxMode() == EBusGearboxMode::Manual;
 }
 
 bool ABusVehicle::AreDoorsOpen() const
@@ -326,11 +396,13 @@ void ABusVehicle::SetCamera(EBusCamera NewCamera)
 	Camera = NewCamera;
 	ChaseCamera->SetActive(Camera == EBusCamera::Chase);
 	CockpitCamera->SetActive(Camera == EBusCamera::Cockpit);
+	DriverViewCamera->SetActive(Camera == EBusCamera::DriverView);
 }
 
 void ABusVehicle::OnThrottle(const FInputActionValue& Value) { ThrottleInput = Value.Get<float>(); }
 void ABusVehicle::OnBrake(const FInputActionValue& Value) { BrakeInput = Value.Get<float>(); }
 void ABusVehicle::OnSteer(const FInputActionValue& Value) { SteerInput = Value.Get<float>(); }
+void ABusVehicle::OnClutch(const FInputActionValue& Value) { ClutchInput = Value.Get<float>(); }
 
 void ABusVehicle::OnLook(const FInputActionValue& Value)
 {
@@ -341,11 +413,7 @@ void ABusVehicle::OnLook(const FInputActionValue& Value)
 
 void ABusVehicle::OnShiftGear(int32 Delta)
 {
-	if (bManualGearbox)
-	{
-		UChaosVehicleMovementComponent* Movement = GetVehicleMovementComponent();
-		Movement->SetTargetGear(Movement->GetTargetGear() + Delta, false);
-	}
+	Drivetrain->RequestShift(Delta);
 }
 
 void ABusVehicle::PawnClientRestart()
@@ -399,7 +467,7 @@ void ABusVehicle::SetupPlayerInputComponent(UInputComponent* PlayerInputComponen
 		Input->BindAction(LookAction, ETriggerEvent::Triggered, this, &ABusVehicle::OnLook);
 	}
 
-	BindPress(CameraAction, [this] { SetCamera(Camera == EBusCamera::Chase ? EBusCamera::Cockpit : EBusCamera::Chase); });
+	BindPress(CameraAction, [this] { SetCamera(static_cast<EBusCamera>((static_cast<uint8>(Camera) + 1) % 3)); });
 	BindPress(ParkingBrakeAction, [this] { AirSystem->ToggleParkingBrake(); });
 	BindPress(DoorFrontAction, [this] { ToggleDoor(0); });
 	BindPress(DoorRearAction, [this] { ToggleDoor(1); });
@@ -410,11 +478,10 @@ void ABusVehicle::SetupPlayerInputComponent(UInputComponent* PlayerInputComponen
 	BindPress(WipersAction, [this] { Controls->ToggleWipers(); });
 	BindPress(GearUpAction, [this] { OnShiftGear(1); });
 	BindPress(GearDownAction, [this] { OnShiftGear(-1); });
-	BindPress(GearboxModeAction, [this]
-	{
-		bManualGearbox = !bManualGearbox;
-		GetVehicleMovementComponent()->SetUseAutomaticGears(!bManualGearbox);
-	});
+	BindPress(GearboxModeAction, [this] { Drivetrain->ToggleGearboxMode(); });
+	BindPress(IgnitionAction, [this] { Drivetrain->ToggleIgnition(); });
+	BindPress(ExhaustBrakeAction, [this] { Drivetrain->ToggleExhaustBrake(); });
+	BindAxis(ClutchAction, &ABusVehicle::OnClutch);
 
 	if (HornAction)
 	{
@@ -440,4 +507,135 @@ FString ABusVehicle::GetDebugString() const
 	}
 	return FString::Printf(TEXT("root %s | mass %.0f kg | in T%.1f B%.1f S%.1f | park %d | wheels(susp cm):%s | pitch %.1f"),
 		*GetMesh()->GetSkinnedAsset()->GetComposedRefPoseMatrix(TEXT("Root")).Rotator().ToCompactString(), GetMesh()->GetMass(), ThrottleInput, BrakeInput, SteerInput, AirSystem->IsParkingBrakeApplied(), *Wheels, GetActorRotation().Pitch);
+}
+
+void ABusVehicle::UpdateCabVisuals(float DeltaTime)
+{
+	// Steering wheel follows the front wheel angle (steering ratio feel without extra state)
+	const UChaosWheeledVehicleMovementComponent* Movement = Cast<UChaosWheeledVehicleMovementComponent>(GetVehicleMovementComponent());
+	const UChaosVehicleWheel* Front = Movement && Movement->Wheels.Num() > 0 ? Movement->Wheels[0].Get() : nullptr;
+	const float MaxSteer = Front ? FMath::Max(Front->MaxSteerAngle, 1.f) : 38.f;
+	const float TargetAngle = Front ? Front->GetSteerAngle() / MaxSteer * SteeringWheelLockAngle : 0.f;
+	SteeringWheelAngle = FMath::FInterpTo(SteeringWheelAngle, TargetAngle, DeltaTime, 12.f);
+	SteeringWheelMesh->SetRelativeRotation(FQuat(SteeringWheelAxis.GetSafeNormal(), FMath::DegreesToRadians(SteeringWheelAngle)));
+
+	// Pedals hinge at the floor about Y
+	const float Brake = Drivetrain->GetGear() < 0 && !IsManualGearbox() ? ThrottleInput : BrakeInput;
+	const float Throttle = Drivetrain->GetGear() < 0 && !IsManualGearbox() ? BrakeInput : ThrottleInput;
+	PedalClutchMesh->SetRelativeRotation(FRotator(-PedalTravel * ClutchInput, 0.f, 0.f));
+	PedalBrakeMesh->SetRelativeRotation(FRotator(-PedalTravel * Brake, 0.f, 0.f));
+	PedalAcceleratorMesh->SetRelativeRotation(FRotator(-PedalTravel * Throttle, 0.f, 0.f));
+
+	// Gear lever in the R-1-3-5 / 2-4-6 gate; neutral sits between the rows
+	const int32 Gear = Drivetrain->IsShifting() ? 0 : Drivetrain->GetGear();
+	float Row = 0.f, Gate = 0.f;
+	if (Gear < 0)
+	{
+		Row = 1.f;
+		Gate = -1.5f;
+	}
+	else if (Gear > 0)
+	{
+		Row = Gear % 2 == 1 ? 1.f : -1.f;
+		Gate = (Gear - 1) / 2 - 0.5f;
+	}
+	const FRotator Target(-Row * GearLeverThrow.X, 0.f, -Gate * GearLeverThrow.Y);
+	GearLeverRotation = FMath::RInterpTo(GearLeverRotation, Target, DeltaTime, 10.f);
+	GearLeverMesh->SetRelativeRotation(GearLeverRotation);
+
+	// Gauges: fraction of full scale -> sweep about the instrument panel normal
+	const FVector Axis = GaugeAxis.GetSafeNormal();
+	auto SetNeedle = [&](UStaticMeshComponent* Needle, float Fraction)
+	{
+		Needle->SetRelativeRotation(FQuat(Axis, FMath::DegreesToRadians(GaugeSweep * FMath::Clamp(Fraction, 0.f, 1.f))));
+	};
+	SetNeedle(NeedleSpeedoMesh, FMath::Abs(GetSpeedKmh()) / GaugeMax.X);
+	SetNeedle(NeedleTachoMesh, GetEngineRpm() / GaugeMax.Y);
+	SetNeedle(NeedleAirMesh, AirSystem->GetPressure() / GaugeMax.Z);
+	SetNeedle(NeedleFuelMesh, FuelLevel);
+}
+
+void ABusVehicle::UpdateDriver(float DeltaTime)
+{
+	if (!DriverMesh->GetSkinnedAsset())
+	{
+		return;
+	}
+
+	FBusDriverTargets Targets;
+
+	// Hands on the rim, carried round by the wheel; hand-over-hand re-grip when one is carried too far
+	const FTransform Wheel = SteeringWheelMesh->GetComponentTransform();
+	const FVector Normal = Wheel.TransformVectorNoScale(SteeringWheelAxis.GetSafeNormal());      // toward the driver
+	const FVector Side = GetMesh()->GetComponentTransform().GetUnitAxis(EAxis::Y);
+	const FVector Up = FVector::CrossProduct(Side, Normal).GetSafeNormal();                     // rim top
+	auto RimPoint = [&](float ClockDeg, float Lift)
+	{
+		const float A = FMath::DegreesToRadians(ClockDeg);
+		return Wheel.GetLocation() + (Up * FMath::Cos(A) + Side * FMath::Sin(A)) * 24.5f + Normal * (GripOffset + Lift);
+	};
+	if (Hands[0].Home == 0.f)
+	{
+		Hands[0].Home = Hands[0].Anchor = -60.f;       // 10 o'clock
+		Hands[1].Home = Hands[1].Anchor = 60.f;        // 2 o'clock
+	}
+	const bool bAnyMoving = Hands[0].Alpha < 1.f || Hands[1].Alpha < 1.f;
+	FVector HandPos[2];
+	for (int32 i = 0; i < 2; ++i)
+	{
+		FBusHandGrip& H = Hands[i];
+		if (H.Alpha >= 1.f && !bAnyMoving && FMath::Abs(H.Anchor + SteeringWheelAngle - H.Home) > RegripAngle)
+		{
+			H.From = H.Anchor;                         // let go: reach back toward home
+			H.Anchor = H.Home - SteeringWheelAngle;
+			H.Alpha = 0.f;
+		}
+		if (H.Alpha < 1.f)
+		{
+			H.Alpha = FMath::Min(1.f, H.Alpha + DeltaTime / FMath::Max(RegripTime, 0.05f));
+			const float T = FMath::SmoothStep(0.f, 1.f, H.Alpha);
+			HandPos[i] = RimPoint(FMath::Lerp(H.From, H.Anchor, T) + SteeringWheelAngle, 9.f * FMath::Sin(PI * H.Alpha));
+		}
+		else
+		{
+			HandPos[i] = RimPoint(H.Anchor + SteeringWheelAngle, 0.f);
+		}
+	}
+	Targets.LeftHand = HandPos[0];
+	Targets.RightHand = HandPos[1];
+	Targets.GripLeft = Hands[0].Alpha < 1.f ? 0.2f : 1.f;
+	Targets.GripRight = Hands[1].Alpha < 1.f ? 0.2f : 1.f;
+
+	// Left hand to the gear knob while shifting or with the clutch down in manual
+	const bool bShifting = Drivetrain->IsShifting() || (IsManualGearbox() && ClutchInput > 0.5f);
+	ShiftHandAlpha = FMath::FInterpConstantTo(ShiftHandAlpha, bShifting ? 1.f : 0.f, DeltaTime, 1.f / FMath::Max(ShiftReachTime, 0.05f));
+	const FVector Knob = GearLeverMesh->GetComponentTransform().TransformPosition(FVector(-10.f, -3.f, 62.f));
+	Targets.LeftHand = FMath::Lerp(Targets.LeftHand, Knob + FVector(0.f, 0.f, 6.f), FMath::SmoothStep(0.f, 1.f, ShiftHandAlpha));
+
+	// Feet on the pedal pads (pad centre in pedal mesh space: hinged pads leaning 55 deg forward)
+	auto Pad = [](const UStaticMeshComponent* Pedal, float Height)
+	{
+		return Pedal->GetComponentTransform().TransformPosition(FVector(Height * 0.29f, 0.f, Height * 0.41f + 4.f));
+	};
+	const bool bInReverse = Drivetrain->GetGear() < 0 && !IsManualGearbox();
+	const float Brake = bInReverse ? ThrottleInput : BrakeInput;
+	const float Throttle = bInReverse ? BrakeInput : ThrottleInput;
+	RightFootBrakeAlpha = FMath::FInterpTo(RightFootBrakeAlpha, Brake > Throttle ? 1.f : 0.f, DeltaTime, 10.f);
+	Targets.RightFoot = FMath::Lerp(Pad(PedalAcceleratorMesh, 27.f), Pad(PedalBrakeMesh, 17.f), RightFootBrakeAlpha);
+	Targets.LeftFoot = Pad(PedalClutchMesh, 17.f);
+
+	Targets.HeadYaw = SteeringWheelAngle / FMath::Max(SteeringWheelLockAngle, 1.f) * 30.f;
+
+	// Body thrown by the bus: forward under braking, outward in turns (smoothed acceleration, m/s2)
+	const FVector LocalVelocity = GetActorTransform().InverseTransformVectorNoScale(GetVelocity());
+	const FVector Accel = DeltaTime > 0.f ? (LocalVelocity - LastLocalVelocity) / DeltaTime * 0.01f : FVector::ZeroVector;
+	LastLocalVelocity = LocalVelocity;
+	const FVector2D TargetLean(FMath::Clamp(-Accel.X * LeanPerAccel, -8.f, 8.f), FMath::Clamp(-Accel.Y * LeanPerAccel, -8.f, 8.f));
+	BodyLean = FMath::Vector2DInterpTo(BodyLean, TargetLean, DeltaTime, 3.f);
+	Targets.LeanForward = BodyLean.X;
+	Targets.LeanSide = BodyLean.Y;
+	Targets.GripLeft = FMath::Lerp(Targets.GripLeft, 0.85f, ShiftHandAlpha);      // knob is a smaller grip
+	Targets.bAtStop = CurrentStop && AreDoorsOpen() && FMath::Abs(GetSpeedKmh()) < 2.f;
+	Targets.DeltaTime = DeltaTime;
+	DriverMesh->UpdatePose(Targets);
 }
