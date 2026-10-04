@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright OpenCircle. All Rights Reserved.
 
 #pragma once
 
@@ -7,18 +7,14 @@
 #include "OpenCircleGameMode.generated.h"
 
 /**
- *  Simple GameMode for a third person game
+ *  Server-only match rules. Wires up the project GameState, PlayerState and PlayerController.
  */
-UCLASS(abstract)
+UCLASS()
 class AOpenCircleGameMode : public AGameModeBase
 {
 	GENERATED_BODY()
 
 public:
-	
-	/** Constructor */
+
 	AOpenCircleGameMode();
 };
-
-
-

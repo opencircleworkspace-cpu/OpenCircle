@@ -9,7 +9,7 @@ UE 5.8 (engine at `D:\UE_5.8`). Hybrid C++/Blueprint. Duos (Driver + Conductor) 
 - Scoring weights live in config/DataAsset, not code.
 - Keep replies and output short.
 
-## Roadmap (current: Phase 1)
+## Roadmap (current: Phase 0 done → Phase 1)
 0. Pre-prod: engine, networking (listen server first), EOS/Steam, design doc.
 1. **Bus**: Chaos Vehicles bus (weight, wide turns, long braking, gears, doors, indicators, horn); walkable interior; cameras (cockpit, chase, conductor, mirrors/map); greybox town (2–3 intersections, 4–6 stops).
 2. Multiplayer: replicated bus, players move in bus local space, lobby (Driver/Conductor), voice, 2–4 buses.
@@ -21,9 +21,12 @@ UE 5.8 (engine at `D:\UE_5.8`). Hybrid C++/Blueprint. Duos (Driver + Conductor) 
 8. Progression, polish, release.
 
 ## Layout
-- `Source/OpenCircle/{Core,Player,Components,UI}`: C++. `Variant_*` = unused template code.
-- `Content/`: assets (empty start; FluidNinjaLive is a plugin pack).
+- `Source/OpenCircle/{Core,Player,Components,UI}`: C++. Core = GameMode/GameState/PlayerState (EBusRole)/GameInstance; types in `Core/BusTypes.h`.
+- `Content/`: `Vehicles/Bus/{Meshes,Materials,Textures}`, `Blueprint/<Feature>/` (BP_), `Input/` (IA_, IMC_), `Maps/` (Lvl_). Sort with `Tools/Unreal/organize_content.py`.
 
 ## Editor automation
 Editor open + Remote Execution enabled, then:
 `python Tools/ue.py "unreal.log('hi')"` or `python Tools/ue.py -f script.py`
+
+## Bus art pipeline
+`blender -b -P Tools/Blender/make_bus.py` → `SourceArt/Bus/*.fbx` → `UnrealEditor.exe OpenCircle.uproject -ExecutePythonScript=Tools/Unreal/setup_bus.py` (import, input, BP_Bus, liveries, Lvl_BusTest). Wheels/doors are static meshes moved by ABusVehicle (no AnimBP). Bus faces +X, door side +Y (left), real Tata LPO 1612 dims.

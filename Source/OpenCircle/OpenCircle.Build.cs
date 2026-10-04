@@ -18,6 +18,9 @@ public class OpenCircle : ModuleRules
 			"StateTreeModule",
 			"GameplayStateTreeModule",
 			"UMG",
+			"NetCore",
+			"ChaosVehicles",
+			"PhysicsCore",
 			"Slate"
 		});
 
