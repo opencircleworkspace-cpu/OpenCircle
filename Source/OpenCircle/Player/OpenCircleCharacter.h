@@ -41,9 +41,9 @@ protected:
 	UPROPERTY(EditAnywhere, Category="Input")
 	UInputAction* LookAction;
 
-	/** Swim Up/Down Input Action (Axis1D, +up / -down) */
+	/** Jump Input Action */
 	UPROPERTY(EditAnywhere, Category="Input")
-	UInputAction* SwimVerticalAction;
+	UInputAction* JumpAction;
 
 	/** Talk (push-to-talk) Input Action */
 	UPROPERTY(EditAnywhere, Category="Input")
@@ -71,9 +71,6 @@ protected:
 	/** Called for looking input */
 	void Look(const FInputActionValue& Value);
 
-	/** Called for swim up/down input */
-	void SwimVertical(const FInputActionValue& Value);
-
 public:
 
 	/** Handles move inputs from either controls or UI interfaces */
@@ -83,10 +80,6 @@ public:
 	/** Handles look inputs from either controls or UI interfaces */
 	UFUNCTION(BlueprintCallable, Category="Input")
 	virtual void DoLook(float Yaw, float Pitch);
-
-	/** Handles swim up/down inputs from either controls or UI interfaces */
-	UFUNCTION(BlueprintCallable, Category="Input")
-	virtual void DoSwimVertical(float Direction);
 
 	/** Handles talk pressed inputs from either controls or UI interfaces */
 	UFUNCTION(BlueprintCallable, Category="Input")

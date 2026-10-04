@@ -40,12 +40,6 @@ AOpenCircleCharacter::AOpenCircleCharacter()
 	Movement->BrakingDecelerationFalling = 1500.0f;
 	Movement->GroundFriction = 6.f;
 
-	// Swimming: slow and floaty, drifts to a stop
-	Movement->MaxSwimSpeed = 300.f;
-	Movement->BrakingDecelerationSwimming = 200.f;
-	Movement->Buoyancy = 1.f;
-	Movement->GetNavAgentPropertiesRef().bCanSwim = true;
-
 	// Create a camera boom (pulls in towards the player if there is a collision)
 	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
 	CameraBoom->SetupAttachment(RootComponent);
@@ -68,8 +62,10 @@ void AOpenCircleCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInpu
 		
 		// Moving
 		EnhancedInputComponent->BindAction(MoveAction, ETriggerEvent::Triggered, this, &AOpenCircleCharacter::Move);
-		EnhancedInputComponent->BindAction(SwimVerticalAction, ETriggerEvent::Triggered, this, &AOpenCircleCharacter::SwimVertical);
-		EnhancedInputComponent->BindAction(SwimVerticalAction, ETriggerEvent::Completed, this, &ACharacter::StopJumping);
+
+		// Jumping
+		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Started, this, &ACharacter::Jump);
+		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Completed, this, &ACharacter::StopJumping);
 
 		// Looking
 		EnhancedInputComponent->BindAction(LookAction, ETriggerEvent::Triggered, this, &AOpenCircleCharacter::Look);
@@ -105,12 +101,6 @@ void AOpenCircleCharacter::Look(const FInputActionValue& Value)
 	DoLook(LookAxisVector.X, LookAxisVector.Y);
 }
 
-void AOpenCircleCharacter::SwimVertical(const FInputActionValue& Value)
-{
-	// route the input
-	DoSwimVertical(Value.Get<float>());
-}
-
 void AOpenCircleCharacter::DoMove(float Right, float Forward)
 {
 	if (GetController() != nullptr)
@@ -141,27 +131,14 @@ void AOpenCircleCharacter::DoLook(float Yaw, float Pitch)
 	}
 }
 
-void AOpenCircleCharacter::DoSwimVertical(float Direction)
-{
-	if (GetCharacterMovement()->IsSwimming())
-	{
-		AddMovementInput(FVector::UpVector, Direction);
-	}
-	else if (Direction > 0.f)
-	{
-		// the same Up input jumps while on land
-		Jump();
-	}
-}
-
 void AOpenCircleCharacter::DoTalkStart()
 {
-	// TODO: route to the comms/oxygen system once it exists
+	// TODO: route to the voice chat system once it exists
 }
 
 void AOpenCircleCharacter::DoTalkEnd()
 {
-	// TODO: route to the comms/oxygen system once it exists
+	// TODO: route to the voice chat system once it exists
 }
 
 void AOpenCircleCharacter::DoInteract()
