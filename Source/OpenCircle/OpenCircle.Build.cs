@@ -21,6 +21,8 @@ public class OpenCircle : ModuleRules
 			"NetCore",
 			"ChaosVehicles",
 			"PhysicsCore",
+			"ProceduralMeshComponent",
+			"Niagara",
 			"Slate"
 		});
 

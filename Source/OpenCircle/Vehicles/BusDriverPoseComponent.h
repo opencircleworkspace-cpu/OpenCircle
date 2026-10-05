@@ -12,10 +12,16 @@ struct FBusDriverTargets
 {
 	GENERATED_BODY()
 
+	/** Hand targets are the knuckles (not the wrist) when a finger direction is given */
 	UPROPERTY(BlueprintReadWrite) FVector LeftHand = FVector::ZeroVector;
 	UPROPERTY(BlueprintReadWrite) FVector RightHand = FVector::ZeroVector;
 	UPROPERTY(BlueprintReadWrite) FVector LeftFoot = FVector::ZeroVector;
 	UPROPERTY(BlueprintReadWrite) FVector RightFoot = FVector::ZeroVector;
+	/** Hand orientation: where the straight fingers point and which way the palm faces (zero = leave as is) */
+	UPROPERTY(BlueprintReadWrite) FVector LeftFingers = FVector::ZeroVector;
+	UPROPERTY(BlueprintReadWrite) FVector LeftPalm = FVector::ZeroVector;
+	UPROPERTY(BlueprintReadWrite) FVector RightFingers = FVector::ZeroVector;
+	UPROPERTY(BlueprintReadWrite) FVector RightPalm = FVector::ZeroVector;
 	/** Head turn from driving (steering), degrees (+ = driver's right) */
 	UPROPERTY(BlueprintReadWrite) float HeadYaw = 0.f;
 	/** Torso lean from vehicle forces, degrees (+ forward / + toward driver's right) */
@@ -59,6 +65,7 @@ protected:
 	/** Finger joint bend at full grip, degrees (base, middle, tip); sign flips curl direction */
 	UPROPERTY(EditAnywhere, Category="Driver|Hands") FVector FingerCurl = FVector(40.f, 55.f, 35.f);
 	UPROPERTY(EditAnywhere, Category="Driver|Hands") float FingerCurlSign = 1.f;
+	UPROPERTY(EditAnywhere, Category="Driver|Hands") float ThumbCurl = 25.f;
 	UPROPERTY(EditAnywhere, Category="Driver|Idle") float BreathsPerMinute = 15.f;
 	UPROPERTY(EditAnywhere, Category="Driver|Idle") float BreathAmplitude = 1.2f;
 	/** Seconds between mirror glances (random in range) */
@@ -70,6 +77,10 @@ private:
 	void SolveTwoBone(FName Upper, FName Lower, FName End, const FVector& Target, const FVector& PoleDirection);
 	void ResetPose();
 	void RotateBoneWorld(FName Bone, const FVector& Axis, float Degrees);
+	/** Current finger direction and palm normal of a hand, from its bones (thumb marks the palm side) */
+	void HandFrame(const TCHAR* Side, FVector& OutFingers, FVector& OutPalm);
+	FVector WristTarget(const TCHAR* Side, const FVector& Knuckles, const FVector& Fingers);
+	void AlignHand(const TCHAR* Side, const FVector& Fingers, const FVector& Palm);
 	void CurlFingers(const TCHAR* Side, float Amount);
 	FVector2D UpdateIdleLook(const FBusDriverTargets& Targets);
 

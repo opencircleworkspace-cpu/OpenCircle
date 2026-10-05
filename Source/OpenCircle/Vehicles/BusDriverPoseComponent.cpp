@@ -7,7 +7,7 @@ UBusDriverPoseComponent::UBusDriverPoseComponent()
 	SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	SetCastShadow(true);
 	PosedBones = { TEXT("spine_01"), TEXT("spine_02"), TEXT("spine_03"), TEXT("head"),
-		TEXT("upperarm_l"), TEXT("lowerarm_l"), TEXT("upperarm_r"), TEXT("lowerarm_r"),
+		TEXT("upperarm_l"), TEXT("lowerarm_l"), TEXT("upperarm_r"), TEXT("lowerarm_r"), TEXT("hand_l"), TEXT("hand_r"),
 		TEXT("thigh_l"), TEXT("calf_l"), TEXT("thigh_r"), TEXT("calf_r") };
 	for (const TCHAR* Side : { TEXT("l"), TEXT("r") })
 	{
@@ -108,8 +108,10 @@ void UBusDriverPoseComponent::UpdatePose(const FBusDriverTargets& Targets)
 	// Legs first (they do not move the torso), then arms; driver's left is -Y in vehicle space
 	SolveTwoBone(TEXT("thigh_l"), TEXT("calf_l"), TEXT("foot_l"), Targets.LeftFoot, Dir(KneePole, -1.f));
 	SolveTwoBone(TEXT("thigh_r"), TEXT("calf_r"), TEXT("foot_r"), Targets.RightFoot, Dir(KneePole, 1.f));
-	SolveTwoBone(TEXT("upperarm_l"), TEXT("lowerarm_l"), TEXT("hand_l"), Targets.LeftHand, Dir(ElbowPole, -1.f));
-	SolveTwoBone(TEXT("upperarm_r"), TEXT("lowerarm_r"), TEXT("hand_r"), Targets.RightHand, Dir(ElbowPole, 1.f));
+	SolveTwoBone(TEXT("upperarm_l"), TEXT("lowerarm_l"), TEXT("hand_l"), WristTarget(TEXT("l"), Targets.LeftHand, Targets.LeftFingers), Dir(ElbowPole, -1.f));
+	SolveTwoBone(TEXT("upperarm_r"), TEXT("lowerarm_r"), TEXT("hand_r"), WristTarget(TEXT("r"), Targets.RightHand, Targets.RightFingers), Dir(ElbowPole, 1.f));
+	AlignHand(TEXT("l"), Targets.LeftFingers, Targets.LeftPalm);
+	AlignHand(TEXT("r"), Targets.RightFingers, Targets.RightPalm);
 
 	CurlFingers(TEXT("l"), Targets.GripLeft);
 	CurlFingers(TEXT("r"), Targets.GripRight);
@@ -126,24 +128,59 @@ void UBusDriverPoseComponent::RotateBoneWorld(FName Bone, const FVector& Axis, f
 		EBoneSpaces::WorldSpace);
 }
 
+void UBusDriverPoseComponent::HandFrame(const TCHAR* Side, FVector& OutFingers, FVector& OutPalm)
+{
+	auto Loc = [this, Side](const TCHAR* Bone) { return GetBoneLocationByName(*FString::Printf(TEXT("%s_%s"), Bone, Side), EBoneSpaces::WorldSpace); };
+	const FVector Wrist = Loc(TEXT("hand"));
+	OutFingers = (Loc(TEXT("middle_01")) - Wrist).GetSafeNormal();
+	OutPalm = FVector::CrossProduct(OutFingers, Loc(TEXT("pinky_01")) - Loc(TEXT("index_01"))).GetSafeNormal();
+	if (FVector::DotProduct(OutPalm, Loc(TEXT("thumb_02")) - Wrist) < 0.f)
+	{
+		OutPalm = -OutPalm;
+	}
+}
+
+FVector UBusDriverPoseComponent::WristTarget(const TCHAR* Side, const FVector& Knuckles, const FVector& Fingers)
+{
+	if (Fingers.IsNearlyZero())
+	{
+		return Knuckles;
+	}
+	const float PalmLength = FVector::Dist(GetBoneLocationByName(*FString::Printf(TEXT("hand_%s"), Side), EBoneSpaces::WorldSpace),
+		GetBoneLocationByName(*FString::Printf(TEXT("middle_01_%s"), Side), EBoneSpaces::WorldSpace));
+	return Knuckles - Fingers.GetSafeNormal() * PalmLength;
+}
+
+void UBusDriverPoseComponent::AlignHand(const TCHAR* Side, const FVector& Fingers, const FVector& Palm)
+{
+	if (Fingers.IsNearlyZero() || Palm.IsNearlyZero())
+	{
+		return;
+	}
+	FVector CurFingers, CurPalm;
+	HandFrame(Side, CurFingers, CurPalm);
+	const FQuat Delta = FRotationMatrix::MakeFromXZ(Fingers, Palm).ToQuat() * FRotationMatrix::MakeFromXZ(CurFingers, CurPalm).ToQuat().Inverse();
+	const FName Hand = *FString::Printf(TEXT("hand_%s"), Side);
+	SetBoneRotationByName(Hand, (Delta * GetBoneRotationByName(Hand, EBoneSpaces::WorldSpace).Quaternion()).Rotator(), EBoneSpaces::WorldSpace);
+}
+
 void UBusDriverPoseComponent::CurlFingers(const TCHAR* Side, float Amount)
 {
-	// Curl axis runs across the knuckles (index base -> pinky base); each joint bends toward the palm
-	const FVector Across = GetBoneLocationByName(*FString::Printf(TEXT("pinky_01_%s"), Side), EBoneSpaces::WorldSpace)
-		- GetBoneLocationByName(*FString::Printf(TEXT("index_01_%s"), Side), EBoneSpaces::WorldSpace);
-	const float SideSign = Side[0] == 'l' ? 1.f : -1.f;
+	// Rotating about Fingers x Palm swings the fingertips toward the palm, whatever the rig's bone axes
+	FVector Fingers, Palm;
+	HandFrame(Side, Fingers, Palm);
+	const FVector Across = FVector::CrossProduct(Fingers, Palm);
 	for (const TCHAR* Finger : { TEXT("index"), TEXT("middle"), TEXT("ring"), TEXT("pinky") })
 	{
 		for (int32 Joint = 1; Joint <= 3; ++Joint)
 		{
-			RotateBoneWorld(*FString::Printf(TEXT("%s_0%d_%s"), Finger, Joint, Side), Across,
-				FingerCurlSign * SideSign * FingerCurl[Joint - 1] * Amount);
+			RotateBoneWorld(*FString::Printf(TEXT("%s_0%d_%s"), Finger, Joint, Side), Across, FingerCurlSign * FingerCurl[Joint - 1] * Amount);
 		}
 	}
 	// Thumb wraps under the rim: smaller bend about the same axis
 	for (int32 Joint = 2; Joint <= 3; ++Joint)
 	{
-		RotateBoneWorld(*FString::Printf(TEXT("thumb_0%d_%s"), Joint, Side), Across, FingerCurlSign * SideSign * 25.f * Amount);
+		RotateBoneWorld(*FString::Printf(TEXT("thumb_0%d_%s"), Joint, Side), Across, FingerCurlSign * ThumbCurl * Amount);
 	}
 }
 

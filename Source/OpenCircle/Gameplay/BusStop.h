@@ -29,6 +29,8 @@ public:
 	UFUNCTION(BlueprintPure, Category="Bus Stop")
 	const FText& GetStopName() const { return StopName; }
 
+	void SetStopName(const FText& InName) { StopName = InName; }
+
 	/** 0..1 progress of the current dwell */
 	UFUNCTION(BlueprintPure, Category="Bus Stop")
 	float GetDwellProgress() const { return DwellTimer / FMath::Max(DwellTime, KINDA_SMALL_NUMBER); }

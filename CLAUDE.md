@@ -22,6 +22,7 @@ UE 5.8 (engine at `D:\UE_5.8`). Hybrid C++/Blueprint. Duos (Driver + Conductor) 
 
 ## Layout
 - `Source/OpenCircle/{Core,Player,Components,UI}`: C++. Core = GameMode/GameState/PlayerState (EBusRole)/GameInstance; types in `Core/BusTypes.h`.
+- `Source/OpenCircle/World`: procedural city. `FCityGenerator` (pure data, seed-deterministic) -> `ACityActor` builds it; rules per city in `UCityDataAsset` (`/Game/Cities/DA_Devgarh`, set up by `Tools/Unreal/setup_devgarh.py`). Only the seed needs replicating.
 - `Content/`: `Vehicles/Bus/{Meshes,Materials,Textures}`, `Blueprint/<Feature>/` (BP_), `Input/` (IA_, IMC_), `Maps/` (Lvl_). Sort with `Tools/Unreal/organize_content.py`.
 
 ## Editor automation

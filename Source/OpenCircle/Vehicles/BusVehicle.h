@@ -18,6 +18,7 @@ class UBusControlsComponent;
 class UBusTelemetryComponent;
 class UBusDrivetrainComponent;
 class UBusDriverPoseComponent;
+class UBusExhaustComponent;
 class ABusStop;
 struct FInputActionValue;
 
@@ -63,6 +64,17 @@ class ABusVehicle : public AWheeledVehiclePawn
 	GENERATED_BODY()
 
 public:
+	/** Put the bus back on the road at the last safe spot. Runs on the server (Server RPC from clients) */
+	UFUNCTION(BlueprintCallable, Category="Bus|Respawn")
+	void Respawn();
+
+	UFUNCTION(Server, Reliable)
+	void ServerRespawn();
+
+	/** Fallback spot when no safe position has been recorded yet (e.g. the route start) */
+	void SetRespawnPoint(const FTransform& Point) { SafeTransform = Point; bHasSafeTransform = true; }
+
+	/** Safe spot = upright, on the ground, recorded every SafeRecordInterval s */
 
 	ABusVehicle();
 
@@ -157,6 +169,10 @@ protected:
 	/** Seated driver character (procedural pose) */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Bus|Driver")
 	TObjectPtr<UBusDriverPoseComponent> DriverMesh;
+
+	/** Diesel smoke at the tailpipe (assign a Niagara system in BP_Bus; see UBusExhaustComponent for its parameters) */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Bus|Exhaust")
+	TObjectPtr<UBusExhaustComponent> Exhaust;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Bus")
 	TObjectPtr<USpotLightComponent> HeadlightLeft;
@@ -270,6 +286,14 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category="Bus|Input") TObjectPtr<UInputAction> ClutchAction;
 	UPROPERTY(EditDefaultsOnly, Category="Bus|Input") TObjectPtr<UInputAction> IgnitionAction;
 	UPROPERTY(EditDefaultsOnly, Category="Bus|Input") TObjectPtr<UInputAction> ExhaustBrakeAction;
+	UPROPERTY(EditDefaultsOnly, Category="Bus|Input") TObjectPtr<UInputAction> RespawnAction;
+
+	UPROPERTY(EditAnywhere, Category="Bus|Respawn") float SafeRecordInterval = 1.f;
+	/** Auto respawn below this world Z (cm) or after being on its side/roof this long (s) */
+	UPROPERTY(EditAnywhere, Category="Bus|Respawn") float KillZ = -100000.f;
+	UPROPERTY(EditAnywhere, Category="Bus|Respawn") float FlippedRespawnTime = 4.f;
+	/** Respawn this far back along the last heading, raised above the road (cm) */
+	UPROPERTY(EditAnywhere, Category="Bus|Respawn") float RespawnLift = 150.f;
 
 private:
 
@@ -302,6 +326,12 @@ private:
 	float DirectionHoldTimer = 0.f;
 	FRotator GearLeverRotation = FRotator::ZeroRotator;
 	float SteeringWheelAngle = 0.f;
+	FTransform SafeTransform;
+	bool bHasSafeTransform = false;
+	float SafeTimer = 0.f;
+	float FlippedTime = 0.f;
+	bool bRespawnPending = false;
+	void UpdateRespawn(float DeltaTime);
 	float ShiftHandAlpha = 0.f;
 	FBusHandGrip Hands[2];
 	FVector LastLocalVelocity = FVector::ZeroVector;

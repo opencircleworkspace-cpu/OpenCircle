@@ -7,6 +7,7 @@
 #include "Vehicles/BusTelemetryComponent.h"
 #include "Vehicles/BusDrivetrainComponent.h"
 #include "Vehicles/BusDriverPoseComponent.h"
+#include "Vehicles/BusExhaustComponent.h"
 #include "Kismet/KismetMathLibrary.h"
 #include "HAL/IConsoleManager.h"
 #include "ChaosWheeledVehicleMovementComponent.h"
@@ -146,6 +147,11 @@ ABusVehicle::ABusVehicle()
 	Telemetry = CreateDefaultSubobject<UBusTelemetryComponent>(TEXT("Telemetry"));
 	Drivetrain = CreateDefaultSubobject<UBusDrivetrainComponent>(TEXT("Drivetrain"));
 
+	// Tailpipe at the rear, off side (door is +Y), pointing backward (component +X = gas direction)
+	Exhaust = CreateDefaultSubobject<UBusExhaustComponent>(TEXT("Exhaust"));
+	Exhaust->SetupAttachment(BodyMesh);
+	Exhaust->SetRelativeLocationAndRotation(FVector(-495.f, -90.f, 40.f), FRotator(0.f, 180.f, 0.f));
+
 	bUseControllerRotationYaw = false;
 
 	UChaosWheeledVehicleMovementComponent* Movement = CastChecked<UChaosWheeledVehicleMovementComponent>(GetVehicleMovementComponent());
@@ -247,11 +253,68 @@ void ABusVehicle::CacheWheelBases()
 	WheelBases.Append(BusVehicle::WheelPositions, UE_ARRAY_COUNT(BusVehicle::WheelPositions));
 }
 
+void ABusVehicle::UpdateRespawn(float DeltaTime)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+	const FVector Up = GetActorUpVector();
+	const bool bUpright = Up.Z > 0.85f;
+	FlippedTime = Up.Z < 0.4f ? FlippedTime + DeltaTime : 0.f;
+	if (GetActorLocation().Z < KillZ || FlippedTime > FlippedRespawnTime)
+	{
+		// Teleporting inside Tick is overwritten by the vehicle's physics step: do it after this frame
+		if (!bRespawnPending)
+		{
+			bRespawnPending = true;
+			GetWorldTimerManager().SetTimerForNextTick([this] { bRespawnPending = false; Respawn(); });
+		}
+		return;
+	}
+	// Remember where the bus last stood upright on the ground
+	SafeTimer += DeltaTime;
+	if (bUpright && SafeTimer >= SafeRecordInterval)
+	{
+		SafeTimer = 0.f;
+		FHitResult Hit;
+		FCollisionQueryParams Params(SCENE_QUERY_STAT(BusSafeSpot), false, this);
+		if (GetWorld()->LineTraceSingleByChannel(Hit, GetActorLocation(), GetActorLocation() - FVector(0, 0, 400.f), ECC_Visibility, Params))
+		{
+			SafeTransform = FTransform(FRotator(0.f, GetActorRotation().Yaw, 0.f), Hit.ImpactPoint);
+			bHasSafeTransform = true;
+		}
+	}
+}
+
+void ABusVehicle::ServerRespawn_Implementation()
+{
+	Respawn();
+}
+
+void ABusVehicle::Respawn()
+{
+	if (!HasAuthority() || !bHasSafeTransform)
+	{
+		return;
+	}
+	FlippedTime = 0.f;
+	SetActorTransform(FTransform(SafeTransform.GetRotation(), SafeTransform.GetLocation() + FVector(0, 0, RespawnLift)), false, nullptr, ETeleportType::ResetPhysics);
+	if (UPrimitiveComponent* Body = Cast<UPrimitiveComponent>(GetRootComponent()))
+	{
+		Body->SetPhysicsLinearVelocity(FVector::ZeroVector);
+		Body->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+	}
+}
+
 void ABusVehicle::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
 	UpdateDriving(DeltaTime);
+	UpdateRespawn(DeltaTime);
+	Exhaust->SetDrivetrain(Drivetrain);
+	Exhaust->Throttle = ThrottleInput;
 	UpdateDoors(DeltaTime);
 	UpdateWheelVisuals();
 	UpdateCabVisuals(DeltaTime);
@@ -481,6 +544,7 @@ void ABusVehicle::SetupPlayerInputComponent(UInputComponent* PlayerInputComponen
 	BindPress(GearboxModeAction, [this] { Drivetrain->ToggleGearboxMode(); });
 	BindPress(IgnitionAction, [this] { Drivetrain->ToggleIgnition(); });
 	BindPress(ExhaustBrakeAction, [this] { Drivetrain->ToggleExhaustBrake(); });
+	BindPress(RespawnAction, [this] { HasAuthority() ? Respawn() : ServerRespawn(); });
 	BindAxis(ClutchAction, &ABusVehicle::OnClutch);
 
 	if (HornAction)
@@ -569,10 +633,14 @@ void ABusVehicle::UpdateDriver(float DeltaTime)
 	const FVector Normal = Wheel.TransformVectorNoScale(SteeringWheelAxis.GetSafeNormal());      // toward the driver
 	const FVector Side = GetMesh()->GetComponentTransform().GetUnitAxis(EAxis::Y);
 	const FVector Up = FVector::CrossProduct(Side, Normal).GetSafeNormal();                     // rim top
-	auto RimPoint = [&](float ClockDeg, float Lift)
+	auto Outward = [&](float ClockDeg)
 	{
 		const float A = FMath::DegreesToRadians(ClockDeg);
-		return Wheel.GetLocation() + (Up * FMath::Cos(A) + Side * FMath::Sin(A)) * 24.5f + Normal * (GripOffset + Lift);
+		return Up * FMath::Cos(A) + Side * FMath::Sin(A);
+	};
+	auto RimPoint = [&](float ClockDeg, float Lift)
+	{
+		return Wheel.GetLocation() + Outward(ClockDeg) * 24.5f + Normal * (GripOffset + Lift);
 	};
 	if (Hands[0].Home == 0.f)
 	{
@@ -581,6 +649,7 @@ void ABusVehicle::UpdateDriver(float DeltaTime)
 	}
 	const bool bAnyMoving = Hands[0].Alpha < 1.f || Hands[1].Alpha < 1.f;
 	FVector HandPos[2];
+	float HandClock[2];
 	for (int32 i = 0; i < 2; ++i)
 	{
 		FBusHandGrip& H = Hands[i];
@@ -594,15 +663,21 @@ void ABusVehicle::UpdateDriver(float DeltaTime)
 		{
 			H.Alpha = FMath::Min(1.f, H.Alpha + DeltaTime / FMath::Max(RegripTime, 0.05f));
 			const float T = FMath::SmoothStep(0.f, 1.f, H.Alpha);
-			HandPos[i] = RimPoint(FMath::Lerp(H.From, H.Anchor, T) + SteeringWheelAngle, 9.f * FMath::Sin(PI * H.Alpha));
+			HandClock[i] = FMath::Lerp(H.From, H.Anchor, T) + SteeringWheelAngle;
+			HandPos[i] = RimPoint(HandClock[i], 9.f * FMath::Sin(PI * H.Alpha));
 		}
 		else
 		{
-			HandPos[i] = RimPoint(H.Anchor + SteeringWheelAngle, 0.f);
+			HandClock[i] = H.Anchor + SteeringWheelAngle;
+			HandPos[i] = RimPoint(HandClock[i], 0.f);
 		}
 	}
 	Targets.LeftHand = HandPos[0];
 	Targets.RightHand = HandPos[1];
+	// Palm on the driver's side of the rim facing the dash, fingers reaching over the outer edge
+	Targets.LeftFingers = Outward(HandClock[0]);
+	Targets.RightFingers = Outward(HandClock[1]);
+	Targets.LeftPalm = Targets.RightPalm = -Normal;
 	Targets.GripLeft = Hands[0].Alpha < 1.f ? 0.2f : 1.f;
 	Targets.GripRight = Hands[1].Alpha < 1.f ? 0.2f : 1.f;
 
@@ -610,7 +685,11 @@ void ABusVehicle::UpdateDriver(float DeltaTime)
 	const bool bShifting = Drivetrain->IsShifting() || (IsManualGearbox() && ClutchInput > 0.5f);
 	ShiftHandAlpha = FMath::FInterpConstantTo(ShiftHandAlpha, bShifting ? 1.f : 0.f, DeltaTime, 1.f / FMath::Max(ShiftReachTime, 0.05f));
 	const FVector Knob = GearLeverMesh->GetComponentTransform().TransformPosition(FVector(-10.f, -3.f, 62.f));
-	Targets.LeftHand = FMath::Lerp(Targets.LeftHand, Knob + FVector(0.f, 0.f, 6.f), FMath::SmoothStep(0.f, 1.f, ShiftHandAlpha));
+	const float ShiftT = FMath::SmoothStep(0.f, 1.f, ShiftHandAlpha);
+	const FTransform& BusXf = GetMesh()->GetComponentTransform();
+	Targets.LeftHand = FMath::Lerp(Targets.LeftHand, Knob + FVector(0.f, 0.f, 6.f), ShiftT);
+	Targets.LeftFingers = FMath::Lerp(Targets.LeftFingers, BusXf.GetUnitAxis(EAxis::X), ShiftT);      // over the knob, palm down
+	Targets.LeftPalm = FMath::Lerp(Targets.LeftPalm, -BusXf.GetUnitAxis(EAxis::Z), ShiftT);
 
 	// Feet on the pedal pads (pad centre in pedal mesh space: hinged pads leaning 55 deg forward)
 	auto Pad = [](const UStaticMeshComponent* Pedal, float Height)
